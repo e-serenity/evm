@@ -38,7 +38,6 @@ aws cloudformation create-stack \
 
 You can import App.yaml in Cloudformation Web Console using "Create stack with new ressources" or use below aws cli command :
 
-Create first time
 ```
 aws cloudformation  create-stack \
     --stack-name kyve-testnet-app \
@@ -81,5 +80,5 @@ aws ecs execute-command --cluster <your-cluster-id-from-previous-command> --task
 
 ## Get load balancer URL
 ```
-aws cloudformation describe-stacks --stack-name ctm-staging-vpc --query "Stacks[0].Outputs[?OutputKey=='LoadbalancerEndpoint'].OutputValue" --output text
+aws cloudformation describe-stacks --stack-name kyve-testnet-vpc --query "Stacks[0].Outputs[?OutputKey=='LoadbalancerEndpoint'].OutputValue" --output text
 ```

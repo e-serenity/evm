@@ -1,0 +1,474 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Cluster in a new VPC
+
+Parameters:
+  VpcEnv:
+    Description: |
+      Short name used to generate resources names (eg: mainnet, testnet, ...). You can't use the same short name
+      twice for multiple stacks !
+    Type: String
+    Default: "testnet"
+    AllowedPattern: ".+"
+    ConstraintDescription: This value is mandatory.
+  VpcCidr:
+    Description: CIDR Range for the VPC
+    Type: String
+    Default: 10.0.0.0/16
+    AllowedPattern: ([0-9]{1,3}\.){3}[0-9]{1,3}($|/(16|24))
+  PublicSubnetOneCidr:
+    Description: CIDR Range for public subnet one
+    Type: String
+    Default: 10.0.1.0/24
+    AllowedPattern: ([0-9]{1,3}\.){3}[0-9]{1,3}($|/24)
+  PublicSubnetTwoCidr:
+    Description: CIDR Range for public subnet two
+    Type: String
+    Default: 10.0.2.0/24
+    AllowedPattern: ([0-9]{1,3}\.){3}[0-9]{1,3}($|/24)
+  PrivateSubnetOneCidr:
+    Description: CIDR Range for private subnet one
+    Type: String
+    Default: 10.0.3.0/24
+    AllowedPattern: ([0-9]{1,3}\.){3}[0-9]{1,3}($|/24)
+  PrivateSubnetTwoCidr:
+    Description: CIDR Range for private subnet two
+    Type: String
+    Default: 10.0.4.0/24
+    AllowedPattern: ([0-9]{1,3}\.){3}[0-9]{1,3}($|/24)
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id'
+  ECSInstanceRole:
+    Description: If role not created https://docs.aws.amazon.com/AmazonECS/latest/developerguide/instance_IAM_role.html
+    Type: String
+    Default: "ecsInstanceRole"
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '${AWS::StackName}'
+      RetentionInDays: 90
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}'
+
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PublicSubnetOneCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'public-1'
+        - Key: subnet-type
+          Value: 'Public'
+
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PublicSubnetTwoCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'public-2'
+        - Key: subnet-type
+          Value: 'Public'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'public-routetable'
+
+  PublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      SubnetId:
+        Ref: PublicSubnetOne
+
+  PublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      SubnetId:
+        Ref: PublicSubnetTwo
+
+  PublicInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Join
+          - "-"
+          - - !Sub '${AWS::StackName}'
+            - 'internet-gateway'
+
+  PublicInternetGatewayAssociation:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'PublicInternetGateway'
+
+  PublicSubnetDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: PublicInternetGateway
+
+  PublicEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'nat-gw-eip'
+
+  PublicNatGW:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - PublicEIP
+          - AllocationId
+      SubnetId:
+        Ref: PublicSubnetOne
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'nat-gw'
+
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PrivateSubnetOneCidr
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'private-1'
+        - Key: subnet-type
+          Value: 'Private'
+
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !Ref PrivateSubnetTwoCidr
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'private-2'
+        - Key: subnet-type
+          Value: 'Private'
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: VPC
+      Tags:
+        - Key: Name
+          Value: !Join
+            - "-"
+            - - !Sub '${AWS::StackName}'
+              - 'private-routetable'
+
+  PrivateSubnetDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: PublicNatGW
+
+  PrivateSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      SubnetId:
+        Ref: PrivateSubnetOne
+
+  PrivateSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      SubnetId:
+        Ref: PrivateSubnetTwo
+
+  KyveSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Access to Web Port from anywhere
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      VpcId: !Ref VPC
+
+  KyveLoadbalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: "application"
+      Scheme: "internet-facing"
+      SecurityGroups:
+        - !Ref KyveSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+
+  KyveListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: KyveTargetGroup
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref KyveTargetGroup
+      LoadBalancerArn: !Ref KyveLoadbalancer
+      Port: 80
+      Protocol: HTTP
+
+  KyveTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      # HealthCheckIntervalSeconds: 15
+      # HealthCheckPath: /healthcheck/
+      #For debug : in prod nedd to remove 404 and 499 !
+      Matcher:
+        HttpCode: "200,404,499"
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 60
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: "t3.micro"
+        IamInstanceProfile:
+          Name: !Ref ECSInstanceRole
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+
+  AutoScalingGroup1:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      AvailabilityZones:
+        - Fn::Select:
+          - 0
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      HealthCheckGracePeriod: 60
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      NewInstancesProtectedFromScaleIn: true
+      MaxSize: "10"
+      MinSize: "0"
+      DesiredCapacity: "0"
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetOne
+  AutoScalingGroup2:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      AvailabilityZones:
+        - Fn::Select:
+          - 1
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      HealthCheckGracePeriod: 60
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      NewInstancesProtectedFromScaleIn: true
+      MaxSize: "10"
+      MinSize: "0"
+      DesiredCapacity: "0"
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetTwo
+  CapacityProvider1:
+    Type: "AWS::ECS::CapacityProvider"
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup1
+        ManagedScaling:
+          Status: ENABLED
+        ManagedTerminationProtection: ENABLED
+  CapacityProvider2:
+    Type: "AWS::ECS::CapacityProvider"
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup2
+        ManagedScaling:
+          Status: ENABLED
+        ManagedTerminationProtection: ENABLED
+
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+  ClusterCPAssociation:
+    Type: "AWS::ECS::ClusterCapacityProviderAssociations"
+    Properties:
+      Cluster: !Ref ECSCluster
+      CapacityProviders:
+        - !Ref CapacityProvider1
+        - !Ref CapacityProvider2
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: !Ref CapacityProvider1
+          Base: 1
+          Weight: 1
+        - CapacityProvider: !Ref CapacityProvider2
+          Weight: 1
+
+  PrivateNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+        Name: !Sub "${VpcEnv}-${AWS::Region}.kyve"
+        Vpc: !Ref VPC
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+        - 'arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM'
+
+  ECSTaskExecutionRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "ses:*"
+            Resource:
+              - "*"
+      PolicyName: !Sub "kyve-ecs-tasks-policy-${AWS::Region}"
+      Roles:
+        - !Ref ECSTaskExecutionRole
+
+# These output values will be available to service templates to use.
+Outputs:
+  VpcEnv:
+    Description: The env of the VPC that this stack is deployed in
+    Value: !Ref 'VpcEnv'
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcEnv"
+  VpcId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+  PrivateSubnetOne:
+    Value: !Ref PrivateSubnetOne
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetOne"
+  PrivateSubnetTwo:
+    Value: !Ref PrivateSubnetTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetTwo"
+  ECSTaskExecutionRole:
+    Value: !Ref ECSTaskExecutionRole
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSTaskExecutionRole"
+  PrivateNamespace:
+    Value: !Ref PrivateNamespace
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateNamespace"
+  CapacityProvider1:
+    Value: !Ref CapacityProvider1
+    Export:
+      Name: !Sub "${AWS::StackName}-CapacityProvider1"
+  CapacityProvider2:
+    Value: !Ref CapacityProvider2
+    Export:
+      Name: !Sub "${AWS::StackName}-CapacityProvider2"
+  ECSCluster:
+    Description: The arn of the ECS cluster
+    Value: !Ref 'ECSCluster'
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSCluster"
+  KyveTargetGroup:
+    Value: !Ref 'KyveTargetGroup'
+    Export:
+      Name: !Sub "${AWS::StackName}-KyveTargetGroup"
+  LoadbalancerId:
+    Description: The App Loadbalancer Arn
+    Value: !Ref 'KyveLoadbalancer'
+  LoadbalancerEndpoint:
+    Description: The App Loadbalancer Endpoint
+    Value: !Join
+      - ""
+      - - "http://"
+        - !GetAtt 'KyveLoadbalancer.DNSName'

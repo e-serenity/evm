@@ -31,32 +31,6 @@ Parameters:
     Default: "100"
 
 Resources:
-  NodeDiscoveryService:
-    Type: AWS::ServiceDiscovery::Service
-    Properties:
-      Description: Private Discovery Service for the KYVE Node
-      DnsConfig:
-        RoutingPolicy: MULTIVALUE
-        DnsRecords:
-          - TTL: 60
-            Type: A
-          - TTL: 60
-            Type: SRV
-      HealthCheckCustomConfig:
-        FailureThreshold: 1
-      Name: node
-      NamespaceId: { 'Fn::ImportValue': !Sub "${VpcStackName}-PrivateNamespace" }
-
-  NodeSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow Access Node
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: "0.0.0.0/0"
-      VpcId: { 'Fn::ImportValue': !Sub "${VpcStackName}-VpcId" }
 
   ECSNodeTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -76,8 +50,6 @@ Resources:
             - !Sub "--private-key=${PrivateKey}"
             - !Sub "--stake=${StackAmount}"
           Image: !Ref NodeImage
-          PortMappings:
-            - ContainerPort: 80
           Memory: 512
           LogConfiguration:
             LogDriver: awslogs
@@ -93,28 +65,18 @@ Resources:
       TaskDefinition: !Ref ECSNodeTaskDefinition
       DesiredCount: !Ref DesiredCount
       EnableExecuteCommand: true
-      HealthCheckGracePeriodSeconds: 300
       DeploymentConfiguration:
         MinimumHealthyPercent: 40
         MaximumPercent: 200
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
-          SecurityGroups:
-          - !Ref NodeSecurityGroup
           Subnets:
           - { 'Fn::ImportValue': !Sub "${VpcStackName}-PrivateSubnetOne" }
           - { 'Fn::ImportValue': !Sub "${VpcStackName}-PrivateSubnetTwo" }
-      LoadBalancers:
-      - TargetGroupArn: { 'Fn::ImportValue': !Sub "${VpcStackName}-KyveTargetGroup" }
-        ContainerPort: 80
-        ContainerName: kyve-node
       CapacityProviderStrategy:
         - CapacityProvider: { 'Fn::ImportValue': !Sub "${VpcStackName}-CapacityProvider1" }
           Base: 1
           Weight: 1
         - CapacityProvider: { 'Fn::ImportValue': !Sub "${VpcStackName}-CapacityProvider2" }
           Weight: 1
-      ServiceRegistries:
-        - RegistryArn: !GetAtt NodeDiscoveryService.Arn
-          Port: 80
